@@ -1,10 +1,31 @@
-
 import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { 
+  Card, 
+  CardContent, 
+  CardHeader, 
+  CardTitle, 
+  CardDescription 
+} from "@/components/ui/card";
+import { 
+  Table, 
+  TableBody, 
+  TableCell, 
+  TableHead, 
+  TableHeader, 
+  TableRow 
+} from "@/components/ui/table";
+import { 
+  Collapsible, 
+  CollapsibleContent, 
+  CollapsibleTrigger 
+} from "@/components/ui/collapsible";
 import { toast } from "sonner";
 import { cvAPI, authAPI } from "../services/api";
+import { compareMultipleCVs } from "../services/geminiAPI";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 // CV type definition
@@ -21,13 +42,37 @@ interface CV {
   feedback?: string;
 }
 
+// Analysis result interface
+interface RankingResult extends CV {
+  score: number;
+  rank: number;
+  relevanceScore: number;
+  keywordAnalysis: {
+    required: {
+      matched: string[];
+      missing: string[];
+      matchPercentage: number;
+    };
+    optional: {
+      matched: string[];
+      missing: string[];
+      matchPercentage: number;
+    };
+  };
+  strengths: string[];
+  weaknesses: string[];
+  recommendations: string[];
+}
+
 const Dashboard = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [userCVs, setUserCVs] = useState<CV[]>([]);
   const [selectedCVs, setSelectedCVs] = useState<string[]>([]);
   const [jobDescription, setJobDescription] = useState("");
-  const [rankingResults, setRankingResults] = useState<CV[]>([]);
+  const [rankingResults, setRankingResults] = useState<RankingResult[]>([]);
   const [isRanking, setIsRanking] = useState(false);
+  const [requiredKeywords, setRequiredKeywords] = useState("");
+  const [optionalKeywords, setOptionalKeywords] = useState("");
   const navigate = useNavigate();
   
   // Check if user is logged in
@@ -67,18 +112,15 @@ const Dashboard = () => {
     
     for (const file of files) {
       try {
-        // Read file content (for demonstration purposes)
         const content = await readFileContent(file);
         
-        // Upload CV
         const newCV = await cvAPI.uploadCV({
           fileName: file.name,
           fileType: file.type,
           fileSize: file.size,
-          content: content.substring(0, 500) + "...", // Truncate for demo
+          content: content.substring(0, 500) + "...",
         }, user.id);
         
-        // Update UI
         setUserCVs(prevCVs => [...prevCVs, newCV]);
         toast.success(`Uploaded ${file.name}`);
       } catch (error) {
@@ -88,7 +130,6 @@ const Dashboard = () => {
     }
     
     setIsLoading(false);
-    // Reset file input
     e.target.value = "";
   };
   
@@ -115,28 +156,47 @@ const Dashboard = () => {
     );
   };
   
-  // Handle ranking of selected CVs
-  const handleRankCVs = async () => {
-    if (selectedCVs.length < 2) {
-      toast.error("Please select at least 2 CVs to rank");
-      return;
-    }
+  // Parse keywords from comma-separated string
+  const parseKeywords = (keywordsString: string): string[] => {
+    if (!keywordsString.trim()) return [];
     
-    if (!jobDescription.trim()) {
-      toast.error("Please enter a job description for better ranking");
+    return keywordsString
+      .split(',')
+      .map(keyword => keyword.trim())
+      .filter(keyword => keyword !== '');
+  };
+  
+  // Handle ranking of selected CVs with keyword analysis
+  const handleRankCVs = async () => {
+    if (selectedCVs.length < 1) {
+      toast.error("Please select at least 1 CV to analyze");
       return;
     }
     
     setIsRanking(true);
     
     try {
-      // Rank the selected CVs
-      const results = await cvAPI.rankCVs(selectedCVs);
+      const selectedCVsContent = userCVs.filter(cv => selectedCVs.includes(cv.id));
+      
+      const requiredKeywordsList = parseKeywords(requiredKeywords);
+      const optionalKeywordsList = parseKeywords(optionalKeywords);
+      
+      if (requiredKeywordsList.length === 0 && optionalKeywordsList.length === 0 && !jobDescription.trim()) {
+        toast.warning("No keywords or job description provided. Results may not be accurate.");
+      }
+      
+      const results = await compareMultipleCVs(
+        selectedCVsContent, 
+        jobDescription,
+        requiredKeywordsList,
+        optionalKeywordsList
+      );
+      
       setRankingResults(results);
-      toast.success("CVs ranked successfully");
+      toast.success("CVs analyzed and ranked successfully");
     } catch (error) {
       console.error("Error ranking CVs:", error);
-      toast.error("Failed to rank CVs");
+      toast.error("Failed to analyze CVs");
     } finally {
       setIsRanking(false);
     }
@@ -148,11 +208,9 @@ const Dashboard = () => {
       const user = JSON.parse(localStorage.getItem("user") || "{}");
       await cvAPI.deleteCV(cvId, user.id);
       
-      // Update UI
       setUserCVs(prevCVs => prevCVs.filter(cv => cv.id !== cvId));
       setSelectedCVs(prev => prev.filter(id => id !== cvId));
       
-      // Remove from ranking results if present
       if (rankingResults.some(cv => cv.id === cvId)) {
         setRankingResults(prev => prev.filter(cv => cv.id !== cvId));
       }
@@ -273,26 +331,52 @@ const Dashboard = () => {
             <Card>
               <CardHeader>
                 <CardTitle>Rank Your CVs</CardTitle>
+                <CardDescription>
+                  Analyze your CVs against job requirements and keywords
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="space-y-6">
-                  <div>
-                    <label className="block text-sm font-medium mb-2">
-                      Enter Job Description
-                    </label>
-                    <textarea 
-                      className="w-full min-h-[120px] p-3 border rounded-md"
-                      placeholder="Enter the job description to compare CVs against..."
-                      value={jobDescription}
-                      onChange={(e) => setJobDescription(e.target.value)}
-                    />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium mb-2">
+                        Required Keywords
+                      </label>
+                      <Input 
+                        placeholder="E.g., JavaScript, React, TypeScript (comma separated)"
+                        value={requiredKeywords}
+                        onChange={(e) => setRequiredKeywords(e.target.value)}
+                        className="mb-4"
+                      />
+                      
+                      <label className="block text-sm font-medium mb-2">
+                        Optional Keywords
+                      </label>
+                      <Input 
+                        placeholder="E.g., Node.js, GraphQL, AWS (comma separated)"
+                        value={optionalKeywords}
+                        onChange={(e) => setOptionalKeywords(e.target.value)}
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium mb-2">
+                        Job Description (optional)
+                      </label>
+                      <Textarea 
+                        className="min-h-[140px] resize-none"
+                        placeholder="Enter the job description for more accurate analysis..."
+                        value={jobDescription}
+                        onChange={(e) => setJobDescription(e.target.value)}
+                      />
+                    </div>
                   </div>
                   
                   <div>
-                    <h3 className="font-medium mb-3">Select CVs to Rank</h3>
+                    <h3 className="font-medium mb-3">Select CVs to Analyze</h3>
                     
                     {userCVs.length === 0 ? (
-                      <p className="text-center py-4 text-gray-500">Please upload CVs to rank them.</p>
+                      <p className="text-center py-4 text-gray-500">Please upload CVs to analyze them.</p>
                     ) : (
                       <div className="space-y-2">
                         {userCVs.map(cv => (
@@ -323,10 +407,10 @@ const Dashboard = () => {
                     <div className="mt-4 text-right">
                       <Button 
                         className="bg-indigo-600 hover:bg-indigo-700 text-white"
-                        disabled={selectedCVs.length < 2 || !jobDescription.trim() || isRanking}
+                        disabled={selectedCVs.length === 0 || isRanking}
                         onClick={handleRankCVs}
                       >
-                        {isRanking ? "Ranking..." : "Rank Selected CVs"}
+                        {isRanking ? "Analyzing..." : "Analyze Selected CVs"}
                       </Button>
                     </div>
                   </div>
@@ -334,30 +418,146 @@ const Dashboard = () => {
                   {/* Ranking Results */}
                   {rankingResults.length > 0 && (
                     <div className="mt-8">
-                      <h3 className="font-bold text-lg mb-4">Ranking Results</h3>
-                      <div className="space-y-4">
-                        {rankingResults.map((cv, index) => (
-                          <div 
-                            key={cv.id} 
-                            className="bg-white p-4 rounded-lg border shadow-sm"
-                          >
-                            <div className="flex items-center justify-between mb-2">
-                              <div className="flex items-center">
-                                <span className="bg-indigo-600 text-white font-bold rounded-full w-8 h-8 flex items-center justify-center mr-3">
-                                  {index + 1}
+                      <h3 className="font-bold text-lg mb-4">Analysis Results</h3>
+                      
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Rank</TableHead>
+                            <TableHead>CV Name</TableHead>
+                            <TableHead>Match Score</TableHead>
+                            <TableHead>Details</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {rankingResults.map((result) => (
+                            <TableRow key={result.id}>
+                              <TableCell className="font-medium">
+                                <span className="inline-flex items-center justify-center bg-indigo-600 text-white font-bold rounded-full w-8 h-8">
+                                  {result.rank}
                                 </span>
-                                <h4 className="font-medium">{cv.fileName}</h4>
-                              </div>
-                              <span className="text-lg font-bold text-indigo-600">
-                                {cv.score}/100
-                              </span>
-                            </div>
-                            <div className="mt-2 text-gray-700">
-                              <p className="text-sm">{cv.feedback}</p>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+                              </TableCell>
+                              <TableCell>{result.fileName}</TableCell>
+                              <TableCell>
+                                <div className="flex items-center">
+                                  <span className="font-bold text-lg mr-2">{result.score}%</span>
+                                  <div className="w-full bg-gray-200 rounded-full h-2.5">
+                                    <div 
+                                      className="bg-indigo-600 h-2.5 rounded-full" 
+                                      style={{width: `${result.score}%`}}
+                                    ></div>
+                                  </div>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <Collapsible>
+                                  <CollapsibleTrigger asChild>
+                                    <Button variant="outline" size="sm">
+                                      Show Details
+                                    </Button>
+                                  </CollapsibleTrigger>
+                                  <CollapsibleContent className="mt-2">
+                                    <div className="rounded-md border p-4 bg-gray-50 space-y-4">
+                                      <div>
+                                        <h4 className="font-semibold mb-2">Keyword Analysis</h4>
+                                        
+                                        <div className="mb-2">
+                                          <p className="text-sm font-medium">Required Keywords:</p>
+                                          <div className="flex flex-wrap gap-1 mt-1">
+                                            {result.keywordAnalysis.required.matched.map(keyword => (
+                                              <span 
+                                                key={keyword}
+                                                className="px-2 py-1 bg-green-100 text-green-800 text-xs rounded"
+                                              >
+                                                {keyword}
+                                              </span>
+                                            ))}
+                                            {result.keywordAnalysis.required.missing.map(keyword => (
+                                              <span 
+                                                key={keyword}
+                                                className="px-2 py-1 bg-red-100 text-red-800 text-xs rounded"
+                                              >
+                                                {keyword}
+                                              </span>
+                                            ))}
+                                            {result.keywordAnalysis.required.matched.length === 0 && 
+                                             result.keywordAnalysis.required.missing.length === 0 && (
+                                              <span className="text-xs text-gray-500">No required keywords specified</span>
+                                            )}
+                                          </div>
+                                        </div>
+                                        
+                                        <div>
+                                          <p className="text-sm font-medium">Optional Keywords:</p>
+                                          <div className="flex flex-wrap gap-1 mt-1">
+                                            {result.keywordAnalysis.optional.matched.map(keyword => (
+                                              <span 
+                                                key={keyword}
+                                                className="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded"
+                                              >
+                                                {keyword}
+                                              </span>
+                                            ))}
+                                            {result.keywordAnalysis.optional.missing.map(keyword => (
+                                              <span 
+                                                key={keyword}
+                                                className="px-2 py-1 bg-gray-100 text-gray-800 text-xs rounded line-through"
+                                              >
+                                                {keyword}
+                                              </span>
+                                            ))}
+                                            {result.keywordAnalysis.optional.matched.length === 0 && 
+                                             result.keywordAnalysis.optional.missing.length === 0 && (
+                                              <span className="text-xs text-gray-500">No optional keywords specified</span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                      
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                          <h4 className="font-semibold text-green-700 mb-1">Strengths</h4>
+                                          <ul className="list-disc pl-5 text-sm space-y-1">
+                                            {result.strengths.length > 0 ? (
+                                              result.strengths.map((strength, i) => (
+                                                <li key={i}>{strength}</li>
+                                              ))
+                                            ) : (
+                                              <li className="text-gray-500">No specific strengths identified</li>
+                                            )}
+                                          </ul>
+                                        </div>
+                                        
+                                        <div>
+                                          <h4 className="font-semibold text-red-700 mb-1">Weaknesses</h4>
+                                          <ul className="list-disc pl-5 text-sm space-y-1">
+                                            {result.weaknesses.length > 0 ? (
+                                              result.weaknesses.map((weakness, i) => (
+                                                <li key={i}>{weakness}</li>
+                                              ))
+                                            ) : (
+                                              <li className="text-gray-500">No specific weaknesses identified</li>
+                                            )}
+                                          </ul>
+                                        </div>
+                                      </div>
+                                      
+                                      <div>
+                                        <h4 className="font-semibold mb-1">Recommendations</h4>
+                                        <ul className="list-disc pl-5 text-sm space-y-1">
+                                          {result.recommendations.map((recommendation, i) => (
+                                            <li key={i}>{recommendation}</li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    </div>
+                                  </CollapsibleContent>
+                                </Collapsible>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
                     </div>
                   )}
                 </div>
