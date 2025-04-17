@@ -2,9 +2,39 @@
 // geminiAPI.js - Integration with Gemini API for CV ranking
 
 /**
- * Helper function to simulate API delay that uses browser's setTimeout
+ * Helper function to simulate API delay using browser's setTimeout
  */
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * String matching algorithms for keyword analysis
+ */
+const stringMatching = {
+  // Exact match (case insensitive)
+  exactMatch: (content, keyword) => {
+    const regex = new RegExp(`\\b${keyword}\\b`, 'i');
+    return regex.test(content);
+  },
+  
+  // Partial match (checks if keyword exists anywhere)
+  partialMatch: (content, keyword) => {
+    return content.toLowerCase().includes(keyword.toLowerCase());
+  },
+  
+  // Context extraction (returns surrounding text for a keyword)
+  extractContext: (content, keyword, charCount = 100) => {
+    const lowerContent = content.toLowerCase();
+    const lowerKeyword = keyword.toLowerCase();
+    const index = lowerContent.indexOf(lowerKeyword);
+    
+    if (index === -1) return null;
+    
+    const start = Math.max(0, index - charCount);
+    const end = Math.min(lowerContent.length, index + lowerKeyword.length + charCount);
+    
+    return content.substring(start, end);
+  }
+};
 
 /**
  * Implementation of Gemini API for CV analysis
@@ -12,33 +42,53 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
  */
 export const analyzeWithGemini = async (cvContent, jobDescription, requiredKeywords = [], optionalKeywords = []) => {
   // In a production app, this would make a real API call to Gemini
-  // For now we'll implement a smarter mock that considers keywords
   await delay(1500);
   
-  // Mock analysis logic that simulates what Gemini would do
-  // In reality, Gemini would analyze the text for semantic matches
-  const mockAnalyzeContent = (content, keywords) => {
+  // Enhanced keyword matching algorithm
+  const analyzeContent = (content, keywords) => {
     if (!content || !keywords.length) return { 
       matches: [], 
-      matchPercentage: 0 
+      matchPercentage: 0,
+      contextMatches: []
     };
     
-    // Simple keyword matching (a real implementation would use AI for semantic matching)
     const contentLower = content.toLowerCase();
-    const matches = keywords.filter(keyword => 
-      contentLower.includes(keyword.toLowerCase())
-    );
+    const matches = [];
+    const contextMatches = [];
+    
+    keywords.forEach(keyword => {
+      // Try exact match first
+      if (stringMatching.exactMatch(content, keyword)) {
+        matches.push(keyword);
+        
+        // Get context for the match
+        const context = stringMatching.extractContext(content, keyword);
+        if (context) {
+          contextMatches.push({ keyword, context });
+        }
+      }
+      // Try partial match if exact match fails
+      else if (stringMatching.partialMatch(content, keyword)) {
+        matches.push(keyword + " (partial)");
+        
+        // Get context for the match
+        const context = stringMatching.extractContext(content, keyword);
+        if (context) {
+          contextMatches.push({ keyword, context, partial: true });
+        }
+      }
+    });
     
     const matchPercentage = keywords.length > 0 
       ? Math.round((matches.length / keywords.length) * 100)
       : 0;
       
-    return { matches, matchPercentage };
+    return { matches, matchPercentage, contextMatches };
   };
   
   // Analyze required and optional keywords separately
-  const requiredAnalysis = mockAnalyzeContent(cvContent, requiredKeywords);
-  const optionalAnalysis = mockAnalyzeContent(cvContent, optionalKeywords);
+  const requiredAnalysis = analyzeContent(cvContent, requiredKeywords);
+  const optionalAnalysis = analyzeContent(cvContent, optionalKeywords);
   
   // Calculate overall score with heavier weight on required keywords
   const overallScore = requiredKeywords.length > 0 || optionalKeywords.length > 0
@@ -58,7 +108,7 @@ export const analyzeWithGemini = async (cvContent, jobDescription, requiredKeywo
   }
   
   const missingRequired = requiredKeywords.filter(keyword => 
-    !requiredAnalysis.matches.includes(keyword)
+    !requiredAnalysis.matches.some(match => match.startsWith(keyword))
   );
   
   if (missingRequired.length > 0) {
@@ -66,7 +116,7 @@ export const analyzeWithGemini = async (cvContent, jobDescription, requiredKeywo
   }
   
   const missingOptional = optionalKeywords.filter(keyword => 
-    !optionalAnalysis.matches.includes(keyword)
+    !optionalAnalysis.matches.some(match => match.startsWith(keyword))
   );
   
   if (missingOptional.length > 0 && optionalKeywords.length > 0) {
@@ -75,17 +125,21 @@ export const analyzeWithGemini = async (cvContent, jobDescription, requiredKeywo
   
   // Return the analysis results
   return {
+    success: true, // Explicitly indicate successful analysis
+    timestamp: new Date().toISOString(),
     relevanceScore: overallScore,
     keywordAnalysis: {
       required: {
         matched: requiredAnalysis.matches,
         missing: missingRequired,
-        matchPercentage: requiredAnalysis.matchPercentage
+        matchPercentage: requiredAnalysis.matchPercentage,
+        contextMatches: requiredAnalysis.contextMatches
       },
       optional: {
         matched: optionalAnalysis.matches,
         missing: missingOptional,
-        matchPercentage: optionalAnalysis.matchPercentage
+        matchPercentage: optionalAnalysis.matchPercentage,
+        contextMatches: optionalAnalysis.contextMatches
       }
     },
     strengths,
@@ -113,20 +167,28 @@ export const compareMultipleCVs = async (cvContents, jobDescription, requiredKey
     return {
       id: cv.id,
       fileName: cv.fileName,
+      fileSize: cv.fileSize,
+      uploadDate: cv.uploadDate,
       score: analysis.overallRanking,
       relevanceScore: analysis.relevanceScore,
       keywordAnalysis: analysis.keywordAnalysis,
       strengths: analysis.strengths,
       weaknesses: analysis.weaknesses,
-      recommendations: analysis.recommendations
+      recommendations: analysis.recommendations,
+      timestamp: analysis.timestamp
     };
   }));
   
   // Sort by score in descending order and assign ranks
-  return results
-    .sort((a, b) => b.score - a.score)
-    .map((result, index) => ({
-      ...result,
-      rank: index + 1
-    }));
+  return {
+    success: true,
+    message: "Analysis completed successfully",
+    timestamp: new Date().toISOString(),
+    results: results
+      .sort((a, b) => b.score - a.score)
+      .map((result, index) => ({
+        ...result,
+        rank: index + 1
+      }))
+  };
 };
