@@ -1,3 +1,4 @@
+
 import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -89,11 +90,18 @@ const Dashboard = () => {
       setIsLoading(true);
       try {
         const user = JSON.parse(localStorage.getItem("user") || "{}");
-        const cvs = await cvAPI.getUserCVs(user.id);
-        setUserCVs(cvs);
+        const response = await cvAPI.getUserCVs(user.id);
+        // Fix: Extract the cvs array from the response
+        if (response && response.cvs) {
+          setUserCVs(response.cvs);
+        } else {
+          setUserCVs([]);
+          console.error("Invalid response format from getUserCVs:", response);
+        }
       } catch (error) {
         console.error("Error fetching CVs:", error);
         toast.error("Failed to load your CVs");
+        setUserCVs([]); // Ensure userCVs is always an array
       } finally {
         setIsLoading(false);
       }
@@ -114,15 +122,18 @@ const Dashboard = () => {
       try {
         const content = await readFileContent(file);
         
-        const newCV = await cvAPI.uploadCV({
+        const response = await cvAPI.uploadCV({
           fileName: file.name,
           fileType: file.type,
           fileSize: file.size,
           content: content.substring(0, 500) + "...",
         }, user.id);
         
-        setUserCVs(prevCVs => [...prevCVs, newCV]);
-        toast.success(`Uploaded ${file.name}`);
+        // Fix: Extract the cv object from the response
+        if (response && response.cv) {
+          setUserCVs(prevCVs => [...prevCVs, response.cv]);
+          toast.success(`Uploaded ${file.name}`);
+        }
       } catch (error) {
         console.error("Error uploading CV:", error);
         toast.error(`Failed to upload ${file.name}`);
@@ -192,8 +203,11 @@ const Dashboard = () => {
         optionalKeywordsList
       );
       
-      setRankingResults(results);
-      toast.success("CVs analyzed and ranked successfully");
+      // Fix: Extract the results array from the response
+      if (results && results.results) {
+        setRankingResults(results.results);
+        toast.success("CVs analyzed and ranked successfully");
+      }
     } catch (error) {
       console.error("Error ranking CVs:", error);
       toast.error("Failed to analyze CVs");
